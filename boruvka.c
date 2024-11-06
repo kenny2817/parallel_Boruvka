@@ -20,7 +20,7 @@ typedef struct MFset {
 } MFset;
 
 // create a graph
-void createGraph(const char *, Graph *, Graph *);
+void createGraph(const char *, Graph *, Graph *, int);
 
 // boruvka algorithm implementation + edge optimization
 //
@@ -41,26 +41,27 @@ void processInput(const char *, Graph *, Graph *);
 // write output in file
 void printOutput(const char *, const Graph *);
 
-// make file for visualization
+// make file for visualization graphViz
 void graphVis(const char *, const Graph *, const Graph *);
 
 int main() {
     Graph G = {0, 0, NULL};
     Graph MST = {0, 0, NULL};
 
-    char *input_adress;
+    char input_adress[100];
     int file_random;
-    printf("input Graph:\n - 0 file\n - 1 random\n");
-    scanf("%d", &file_random);
+    printf("Graph from file [y/N] : ");
+    scanf("%c", &file_random);
 
-    if (file_random) {
-        printf("Vertices ad Edges:");
-        scanf("%d %d", &G.V, &G.E);
-        if (G.E + 1 < G.V) return EXIT_FAILURE;
-        createGraph(INPUT, &G, &MST);
+    if (file_random != 'y' || file_random != 'Y') {
+        printf("Vertices ad Edges, max Weight:");
+        int W;
+        scanf("%d %d %d", &G.V, &G.E, &W);
+        if (G.E + 1 < G.V || G.E * 2 > G.V * G.V) return EXIT_FAILURE;
+        createGraph(INPUT, &G, &MST, W);
     } else {
         printf("file name: ");
-        scanf("%s", &input_adress);
+        scanf("%s", input_adress);
         processInput(input_adress, &G, &MST);
         if (G.E + 1 < G.V) return EXIT_FAILURE;
     }
@@ -75,30 +76,56 @@ int main() {
     return EXIT_SUCCESS;
 }
 
-void createGraph(const char *input, Graph *G, Graph *MST) {
+void createGraph(const char *input, Graph *G, Graph *MST, const int W) {
     srand(time(NULL));
-    FILE *f = fopen(input, "a");
+    FILE *f = fopen(input, "w");
+    fprintf(f, "%d %d\n", G->V, G->E);
     G->edges = malloc(G->E * sizeof(Edge));
-    int *randomizedAccess = malloc(G->V * sizeof(int));
     MFset *set = malloc(G->V * sizeof(MFset));
-    for (int v = 0; v < G->V; ++v) {
-        set[v].parent = v;
-        set[v].rank = 0;
-        randomizedAccess[v] = v;
-    }
-    for (int v = 0, index; v < G->V; ++v) {
-        index = rand() % G->V;
-        randomizedAccess[v] = index;
-        randomizedAccess[index] = v;
+    int **adj = malloc(G->V * sizeof(int *));
+
+    for (int i = 0; i < G->V; ++i) {
+        adj[i] = malloc(G->V * sizeof(int));
+        for (int j = 0; j < G->V; ++j) adj[i][j] = -1;
+        adj[i][i] = 1;
+        set[i].parent = i;
+        set[i].rank = 0;
     }
 
-    for (int v = 1; v < G->V; ++v) {
-        // creo edge se colleghi 2 set differenti e merge
-        }
+    int set1, set2;
+    int rnd, rnd1, w, i = 0;
 
-    free(randomizedAccess);
+    for (; i < G->V - 1; ++i) {
+        do {
+            rnd = rand() % G->V;
+            set1 = MFind(set, i);
+            set2 = MFind(set, rnd);
+        } while (set1 == set2);
+
+        w = rand() % W;
+        G->edges[i] = (Edge){i, rnd, w};
+        fprintf(f, "%d %d %d\n", i, rnd, w);
+        adj[i][rnd] = 1;
+        adj[rnd][i] = 1;
+        MergeF(set, set1, set2);
+    }
     free(set);
+
+    for (; i < G->E; ++i) {
+        do {
+            rnd = rand() % G->V;
+            rnd1 = rand() % G->V;
+        } while (adj[rnd][rnd1] == 1);
+        w = rand() % W;
+        G->edges[i] = (Edge){rnd, rnd1, w};
+        adj[rnd1][rnd] = 1;
+        adj[rnd][rnd1] = 1;
+        fprintf(f, "%d %d %d\n", rnd, rnd1, w);
+    }
+
     fclose(f);
+    for (int i = 0; i < G->V; ++i) free(adj[i]);
+    free(adj);
     MST->edges = malloc((G->V - 1) * sizeof(Edge));
 }
 
@@ -116,7 +143,6 @@ void boruvka(Graph *G, Graph *MST) {
 
     int set1, set2;
     int e, v, r = -1;
-
     while (MST->E < G->V - 1) {
         for (e = 0; e < G->E; ++e) {
             set1 = MFind(set, G->edges[e].src);
@@ -145,7 +171,6 @@ void boruvka(Graph *G, Graph *MST) {
         }
         for (; r >= 0; --r) G->edges[removable[r]] = G->edges[--(G->E)];  // edge cutting optimization
     }
-
     free(removable);
     free(cheap);
     free(set);
@@ -171,6 +196,7 @@ void MergeF(MFset *set, int a, int b) {
 }
 
 void processInput(const char *input, Graph *G, Graph *MST) {
+    printf("%s\n", input);
     FILE *f = fopen(input, "r");
     fscanf(f, "%d %d", &G->V, &G->E);
     G->edges = malloc(G->E * sizeof(Edge));
@@ -182,7 +208,7 @@ void processInput(const char *input, Graph *G, Graph *MST) {
 }
 
 void printOutput(const char *output, const Graph *MST) {
-    FILE *f = fopen(output, "a");
+    FILE *f = fopen(output, "w");
     int weight = 0;
     fprintf(f, "\n\nMST\n\n");
     for (int e = 0; e < MST->E; weight += MST->edges[e++].weight) {
