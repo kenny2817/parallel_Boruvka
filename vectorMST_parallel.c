@@ -1,3 +1,4 @@
+#include <locale.h>
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,13 +7,13 @@
 #define INPUT "graph.txt"
 #define OUTPUT "mst.txt"
 
-#define ITERATIONS 10
+#define ITERATIONS 20
 #define MAX_W 1000
 #define MAX_EDGES_FOR_VERTIX(vertix) ((vertix * (vertix - 1)) / 2)
-#define START_V 128
-#define MAX_V 512  // 8192
+#define START_V 1024
+#define MAX_V 1024  // 8192
 #define MIN_THREADS 1
-#define MAX_THREADS 8
+#define MAX_THREADS 20
 
 typedef struct Edge {
     long long int src, dest, weight;
@@ -43,6 +44,7 @@ double time_f[TIMES] = {0};
 // testing boruvka alg for Iteration times
 // 1 - seed (or time(null))
 int main(int argc, char *argv[]) {
+    setlocale(LC_NUMERIC, "fr_FR");
     srand(time(NULL));
 
     if (argc == 2) {
@@ -62,14 +64,14 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
     FILE *f = fopen("time.txt", "a");
+    FILE *x = fopen("time.csv", "a");
 
     for (G.V = START_V; G.V <= MAX_V; G.V <<= 1) {
         printf("\nvertices: %lld\n", G.V);
-        for (int nth = MIN_THREADS; nth <= MAX_THREADS; nth <<= 1) {
+        for (int nth = MIN_THREADS; nth <= MAX_THREADS; nth += 1) {
             omp_set_num_threads(nth);
             // G.E = G.V + rand() % (MAX_EDGES_FOR_VERTIX(G.V) - G.V);  // rand but how can i test? rand on what level? iter or single?
             G.E = MAX_EDGES_FOR_VERTIX(G.V);  // const at max dim (complete)
-            int t, avg_serial = 0;
             double t1, avg_time = 0.0;
             for (int i = 0; i < ITERATIONS; ++i) {
                 printf("\r%d", i);
@@ -77,26 +79,28 @@ int main(int argc, char *argv[]) {
                 // G.E = G.V + i * ((MAX_EDGES_FOR_VERTIX(G.V) - G.V) / (ITERATIONS - 1));  // different graph dimension per iteration (might miss golden vertices)
                 createGraph(INPUT, &G, MAX_W);
 
-                t = clock();
                 t1 = omp_get_wtime();
                 boruvka(&G, MST);
-                avg_serial += (clock() - t);  // normalized i think / (i ? i : 1)
-                avg_time += (omp_get_wtime() - t1);
+                avg_time += (omp_get_wtime() - t1);  // normalized i think / (i ? i : 1)
 
                 // printOutput(OUTPUT, &G, &MST);
             }
+            fprintf(x, "%d.%lld", nth, G.V);
             fprintf(f, "nth %3d || vertices %10lld", nth, G.V);
             for (int i = 0; i < TIMES; ++i) {
+                fprintf(x, ".%f", time_f[i] / ITERATIONS);
                 fprintf(f, " || f%d %15.10f", i, time_f[i] / ITERATIONS);
                 time_f[i] = 0;
             }
             fprintf(f, "\n");
-            printf("\rnth: %3d || ctime: %15.10f || omptime: %15.10f\n", omp_get_max_threads(), ((double)avg_serial / ITERATIONS / CLOCKS_PER_SEC) * nth, (avg_time / ITERATIONS) * nth);
+            fprintf(x, "\n");
+            printf("\rnth: %3d || omptime: %15.10f\n", omp_get_max_threads(), avg_time / ITERATIONS);
         }
         fprintf(f, "\n");
     }
     fprintf(f, "===================================================================================================================================================================\n\n");
 
+    fclose(x);
     fclose(f);
     free(MST);
     free(G.edges);
