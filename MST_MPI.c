@@ -7,6 +7,8 @@
 #include "graph.h"
 
 #define FOR(start, stop) for (i = start; i < stop; ++i)
+#define OUT_DEGREE(iter, index) pastG[iter]->out_degree[super_vertex[index]]
+#define OUT_DEGREE_ITNEXT(index) OUT_DEGREE(iteration + 1, index)
 
 #define INPUT "graph.txt"
 #define OUTPUT "mst.txt"
@@ -37,6 +39,13 @@ int main(int argc, char **argv) {
     MPI_Finalize();
     return 0;
 }
+
+void find_min_edge(const Graph_CSR *, TYP *, const int);
+void merge_edges(const Graph_CSR *, TYP *, TYP *, TYP *, const int, int *);
+void parent_compression(TYP *, const int);
+void super_vertex_init(TYP *, const TYP *, const TYP, const TYP);
+void mpi_exclusive_prefix_sum(int *, int *, const TYP, const TYP);
+void mpi_exclusive_prefix_sum(int *, int *, const TYP, const TYP);
 
 // while number of vertices > 1 do
 // 2: Find minimum edge per vertex
@@ -111,15 +120,12 @@ void boruvka(const Graph_CSR *G, TYP *MST, int rank, int commsz) {
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, min_edge, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD, &req[3]);  // could be usless
 
         MPI_Wait(&req[0], MPI_STATUS_IGNORE);  // parent
-
         // compression
         // the omp version should be better as there is the possibility o skipping more parents in the process as they are always updated
-        // the mpi version has less possibility to skip the more the commsz increasebut there is no overhead other that the all gatherv
+        // the mpi version has less possibility to skip the more the commsz increase but there is no overhead other that the all gatherv
         // hibrid seem difficult as there would be race conditions
         FOR(start, stop) parent_compression(parent, i);
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, parent, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD);
-
-        // vertices and edges
 
         MPI_Wait(&req[1], MPI_STATUS_IGNORE);  // removed
         // new graph
@@ -137,23 +143,23 @@ void boruvka(const Graph_CSR *G, TYP *MST, int rank, int commsz) {
 
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, super_vertex, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD);
 
+        MPI_Wait(&req[3], MPI_STATUS_IGNORE);  // min_edge
         // out edges
         FOR(start, stop) {
-            pastG[iteration + 1]->out_degree[super_vertex[parent[i]]] += pastG[iteration]->out_degree[i];  // - 2 * removed edges  || case not connected not managed ------------------------------
-            if (min_edge[i] != -1) {
-                pastG[iteration + 1]->out_degree[super_vertex[i]]--;
-                pastG[iteration + 1]->out_degree[super_vertex[pastG[iteration]->destination[min_edge[i]]]]--;  // also possible to make a macro ma meke it more readable?
+            OUT_DEGREE_ITNEXT(parent[i]) += pastG[iteration]->out_degree[i];  // - 2 * removed edges
+            if (min_edge[i] != -1) {                                          // case not connected not managed ------------------------------????
+                OUT_DEGREE_ITNEXT(i)--;
+                OUT_DEGREE_ITNEXT(pastG[iteration]->destination[min_edge[i]])--;
             }
         }
         MPI_Allreduce(MPI_IN_PLACE, &pastG[iteration + 1]->out_degree, next_iter_v, MPI_TYP, MPI_SUM, MPI_COMM_WORLD);
 
         // first edge
-        mpi_exclusive_prefix_sum(pastG[iteration + 1]->out_degree, pastG[iteration + 1], start, stop);  // need new start and stop, can i already make new ones? --------------------------------
+        mpi_exclusive_prefix_sum(pastG[iteration + 1]->out_degree, pastG[iteration + 1]->first_edge, start, stop);  // need new start and stop, can i already make new ones? -------
 
-        // edges
+        // edges -------------------------------------------------------------------
 
         MPI_Wait(&req[2], MPI_STATUS_IGNORE);  // MST
-        MPI_Wait(&req[3], MPI_STATUS_IGNORE);  // min_edge
         iteration++;
     }
 
@@ -165,7 +171,7 @@ void boruvka(const Graph_CSR *G, TYP *MST, int rank, int commsz) {
     free(displs);
 }
 
-void find_min_edge(const Graph_CSR *G, TYP *min_edge, int i) {
+void find_min_edge(const Graph_CSR *G, TYP *min_edge, const int i) {
     int first_index = G->first_edge[i];
     int min = first_index;
     for (int j = first_index + 1; j < first_index + G->out_degree; ++j) {
@@ -176,7 +182,7 @@ void find_min_edge(const Graph_CSR *G, TYP *min_edge, int i) {
     min_edge[i] = min;
 }
 
-void merge_edges(const Graph_CSR *G, TYP *MST, TYP *min_edge, TYP *parent, int i, int *removed) {
+void merge_edges(const Graph_CSR *G, TYP *MST, TYP *min_edge, TYP *parent, const int i, int *removed) {
     int dest = G->destination[i];
     if (dest >= 0) {  // if not connected || unlikely()
         if (dest < i && G->destination[min_edge[dest]] == i) {
@@ -189,7 +195,7 @@ void merge_edges(const Graph_CSR *G, TYP *MST, TYP *min_edge, TYP *parent, int i
     }
 }
 
-void parent_compression(TYP *parent, int i) {
+void parent_compression(TYP *parent, const int i) {
     int father, grand_father;
     do {
         parent[i] = parent[parent[i]];  // jump liv
@@ -198,7 +204,7 @@ void parent_compression(TYP *parent, int i) {
     } while (father != grand_father);
 }
 
-void super_vertex_init(TYP *super_vertex, const TYP *parent, const int start, const int stop) {
+void super_vertex_init(TYP *super_vertex, const TYP *parent, const TYP start, const TYP stop) {
     int i;
 
     FOR(start, stop)
