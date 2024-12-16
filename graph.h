@@ -40,4 +40,22 @@ Graph_CSR* default_graph(const int E, const int V) {
     return g;
 }
 
+Graph_CSR* base_graph(const int E, const int V) {
+    Graph_CSR* g = malloc(sizeof(Graph_CSR));
+    if (!g) {
+        perror("malloc failed");
+        exit(EXIT_FAILURE);
+    }
+    *g = (Graph_CSR){.E = E, .V = V, .destination = NULL, .weight = NULL, .first_edge = NULL, .out_degree = NULL};
+    return g;
+}
+
+void free_graph(Graph_CSR* G) {
+    free(G->destination);
+    free(G->weight);
+    free(G->first_edge);
+    free(G->out_degree);
+    free(G);
+}
+
 #endif
