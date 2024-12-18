@@ -59,8 +59,7 @@ void reduce_edges(const Graph_CSR *, Graph_CSR *, const TYP *, const TYP *, cons
 // 9: Assign edge segments to new vertices
 // 10: Insert new edges
 void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
-    int iteration = 0;
-    int next_iter_v, next_iter_e;
+    int iteration, next_iter_v, next_iter_e;
     TYP start, stop, partition, missing, i, ii, count, istart, istop;
     MPI_Request req[3];
 
@@ -73,19 +72,16 @@ void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
     int *recvCounts1 = malloc(commsz * sizeof(int));
     int *displs1 = malloc(commsz * sizeof(int));
 
+    iteration = 0;
     OLD_G = G;
-    TYP vertices = OLD_G->V;
     compute_partitions(recvCounts, displs, &start, &stop, OLD_G->V, rank, commsz);
+    FOR(i, start, stop) min_edge[i] = -1;
 
-    while (vertices > 0) {
+    while (OLD_G->V > 0) {
         // find min edgess for each v || uneven workload
         FOR(i, start, stop) find_min_edge(OLD_G, min_edge, i);
-        MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, min_edge, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD);
+        MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, min_edge, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD);
 
-        // init parent
-        FOR(i, start, stop) parent[i] = -1;
-
-        MPI_Wait(&req[0], MPI_STATUS_IGNORE);
         // remove mirrors + merge mfset
         FOR(i, start, stop) merge_edges(OLD_G, MST, min_edge, parent, i);
         // here i should save the edges i want to put in mst
@@ -130,6 +126,7 @@ void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
         // edges
         reduce_edges(OLD_G, NEW_G, parent, super_vertex, start, stop);
 
+        //
         int start1 = NEW_G->first_edge[start];
         int stop1 = NEW_G->first_edge[stop] + NEW_G->out_degree[stop];
         compute_recvCounts_dipls(recvCounts1, displs1, start1, stop1, rank);
@@ -142,6 +139,7 @@ void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
     }
 
     // MST reduce
+    MPI_Iallreduce(MPI_IN_PLACE, MST, &req[0]);
 
     for (i = 1; i < iteration; ++i) free_graph(pastG[i]);
     free(pastG);
@@ -151,6 +149,8 @@ void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
     free(displs);
     free(recvCounts1);
     free(displs1);
+
+    MPI_Wait(&req[0], MPI_STATUS_IGNORE);
 }
 
 void compute_recvCounts_dipls(int *recvCounts, int *displs, const int start, const int stop, const int rank) {
@@ -185,17 +185,16 @@ void find_min_edge(const Graph_CSR *G, TYP *min_edge, const int i) {
     min_edge[i] = min;
 }
 
-// control if miedge is used elswhere if not giveup else and control indexes
 void merge_edges(const Graph_CSR *G, TYP *MST, TYP *min_edge, TYP *parent, const int i) {
     int dest = G->destination[i];
-    if (dest >= 0) {  // if not connected || unlikely()
-        if (dest < i && G->destination[min_edge[dest]] == i) {
-            min_edge[i] = -1;  // mirrored edge
-        } else {
-            parent[i] = dest;      // mfset init
-            MST[min_edge[i]] = 1;  // MST store || storing both?
-        }
+    int dest_dest = G->destination[min_edge[dest]];
+    if (dest >= 0 && !(dest < i && dest_dest == i)) {  // if init + if mirror only save the one pointing to the smalles one
+        parent[i] = dest;                              // mfset init
+        MST[i] = min_edge[i];                          // MST store // PROBLEMMMMMMMMMM
+    } else {                                           //
+        parent[i] = i;                                 // mfset init
     }
+    min_edge[i] = -1;  // min_edge reset for next iter
 }
 
 void parent_compression(TYP *parent, const int i) {
@@ -260,25 +259,25 @@ int last_binary_search(const TYP *super_vertex, int size, int lookfor) {
     return right;
 }
 
-// control indexes
 void reduce_edges(const Graph_CSR *Gin, Graph_CSR *Gout, const TYP *parent, const TYP *super_vertex, const TYP start, const TYP stop) {
-    // first elem to look is parent[?] = start
-    int first_vertex_in = last_binary_search(super_vertex, Gin->V, start);  // cheap heuristic
-
     int i, k, from, to, master_parent;
+    int first_vertex_in = last_binary_search(super_vertex, Gin->V, start);  // cheap heuristic 1
+
     int edge_out = Gout->first_edge[start];
-    FOR(i, first_vertex_in, Gin->E) {
+    int tot_edge = Gout->first_edge[stop] + Gout->out_degree[stop];
+    FOR(i, first_vertex_in, Gin->V) {  // for each possible vertex in Gin
         master_parent = parent[i];
-        if (master_parent >= start && master_parent < stop) {
+        if (master_parent >= start && master_parent < stop) {  // if vertex parent is within range
             from = Gin->first_edge[i];
             to = from + Gin->out_degree[i];
-            FOR(k, from, to) {
-                if (parent[Gin->destination[k]] != master_parent) {
+            FOR(k, from, to) {                                       // for edges of that vertex
+                if (parent[Gin->destination[k]] != master_parent) {  // if the edge crosses parent
                     Gout->destination[edge_out] = Gin->destination[k];
                     Gout->weight[edge_out] = Gin->weight[k];
                     edge_out++;
                 }
             }
+            if (edge_out >= tot_edge) break;  // cheap heuristic 2
         }
     }
 }
