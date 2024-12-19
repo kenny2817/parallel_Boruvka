@@ -8,8 +8,8 @@
 
 #define MAX_EDGES_FOR_VERTIX(vertix) ((vertix * (vertix - 1)) / 2)
 #define FOR(i, start, stop) for (i = start; i < stop; ++i)
-#define OLD_G pastG[iteration]
-#define NEW_G pastG[iteration + 1]
+#define OLD_G graph[iteration]
+#define NEW_G graph[iteration + 1]
 
 #define INPUT "graph.txt"
 #define OUTPUT "mst.txt"
@@ -40,13 +40,13 @@ int main(int argc, char **argv) {
 
 void compute_partitions(int *, int *, TYP *, TYP *, const int, const int, const int);
 void find_min_edge(const Graph_CSR *, TYP *, const int);
-void merge_edges(const Graph_CSR *, TYP *, TYP *, TYP *, const int);
+void merge_edge(const Graph_CSR *, TYP *, const int *, TYP *, TYP *, const int, int *);
 void parent_compression(TYP *, const int);
 void super_vertex_init(TYP *, const TYP *, const TYP, const TYP);
 void mpi_exclusive_prefix_sum(int *, int *, const TYP, const TYP);
 void out_degree_init(int *, const Graph_CSR *, const TYP *, int *, const TYP, const TYP);
 void allocate_new_graph(Graph_CSR *, const int *, const int, const int);
-void reduce_edges(const Graph_CSR *, Graph_CSR *, const TYP *, const TYP *, const TYP, const TYP);
+void reduce_edges(const Graph_CSR *, Graph_CSR *, const TYP *, const TYP *, const int *, int *, const TYP, const TYP);
 
 // while number of vertices > 1 do
 // 2: Find minimum edge per vertex
@@ -59,21 +59,32 @@ void reduce_edges(const Graph_CSR *, Graph_CSR *, const TYP *, const TYP *, cons
 // 9: Assign edge segments to new vertices
 // 10: Insert new edges
 void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
-    int iteration, next_iter_v, next_iter_e;
+    int iteration, next_iter_v, next_iter_e, internal_index;
     TYP start, stop, partition, missing, i, ii, count, istart, istop;
     MPI_Request req[3];
 
-    Graph_CSR **pastG = (Graph_CSR **)malloc(((int)log2f((float)G->V) + 1) * sizeof(Graph_CSR *));
+    Graph_CSR **graph = (Graph_CSR **)malloc(((int)log2f((float)G->V) + 1) * sizeof(Graph_CSR *));
     TYP *min_edge = malloc(G->V * sizeof(TYP));  // if multiple of rank -> less overhead
     TYP *parent = malloc(G->V * sizeof(TYP));
     TYP *super_vertex = calloc(G->V, sizeof(TYP));
+
     int *recvCounts = malloc(commsz * sizeof(int));
-    int *displs = malloc(commsz * sizeof(int));
     int *recvCounts1 = malloc(commsz * sizeof(int));
+    int *displs = malloc(commsz * sizeof(int));
     int *displs1 = malloc(commsz * sizeof(int));
+
+    int *edge_map = malloc(G->E * sizeof(int));
+    int *edge_map_tmp = malloc(G->E * sizeof(int));
 
     iteration = 0;
     OLD_G = G;
+
+    // tosta...
+    start = OLD_G->first_edge[start];
+    stop = OLD_G->first_edge[stop] + OLD_G->out_degree[stop];
+    FOR(i, start, stop) edge_map_tmp[i] = 1;
+    mpi_exclusive_prefix_sum(edge_map_tmp, edge_map, start, stop);
+
     compute_partitions(recvCounts, displs, &start, &stop, OLD_G->V, rank, commsz);
     FOR(i, start, stop) min_edge[i] = -1;
 
@@ -83,7 +94,7 @@ void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, min_edge, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD);
 
         // remove mirrors + merge mfset
-        FOR(i, start, stop) merge_edges(OLD_G, MST, min_edge, parent, i);
+        FOR(i, start, stop) merge_edge(OLD_G, MST, edge_map, min_edge, parent, i, &internal_index);
         // here i should save the edges i want to put in mst
         // for now we save partial in mst and final gather will do the trick
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, parent, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD);
@@ -106,6 +117,8 @@ void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
         FOR(i, start, stop) parent[i] = super_vertex[parent[i]];                                                           // improves locality, not sure if needed
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, parent, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD, req[0]);  // by inverting order we could make things better with igatherv
 
+        // early exit here i suppose? --------------
+        /// NEW GRAPH
         // out edges
         next_iter_v += super_vertex[OLD_G->V - 1];
         int *new_out_degree = calloc(next_iter_v, sizeof(int));
@@ -115,7 +128,7 @@ void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
         MPI_Iallreduce(MPI_IN_PLACE, &next_iter_e, 1, MPI_TYP, MPI_SUM, MPI_COMM_WORLD, &req[1]);
 
         MPI_Waitall(2, req, MPI_STATUS_IGNORE);  // new_out_degree + next_iter_e
-        // new graph
+        // allocation
         allocate_new_graph(NEW_G, new_out_degree, next_iter_e, next_iter_v);
         compute_partitions(recvCounts, displs, &start, &stop, next_iter_v, rank, commsz);  // new start + stop + recvCounts + displs
 
@@ -124,30 +137,33 @@ void boruvka(const Graph_CSR *G, TYP *MST, const int rank, const int commsz) {
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->first_edge, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD, req[0]);
 
         // edges
-        reduce_edges(OLD_G, NEW_G, parent, super_vertex, start, stop);
-
-        //
+        reduce_edges(OLD_G, NEW_G, parent, super_vertex, edge_map, edge_map_tmp, start, stop);
         int start1 = NEW_G->first_edge[start];
         int stop1 = NEW_G->first_edge[stop] + NEW_G->out_degree[stop];
         compute_recvCounts_dipls(recvCounts1, displs1, start1, stop1, rank);
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->destination, recvCounts1, displs1, MPI_TYP, MPI_COMM_WORLD, &req[1]);
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->weight, recvCounts1, displs1, MPI_TYP, MPI_COMM_WORLD, &req[2]);
+        MPI_Iallgatherv(edge_map_tmp, stop1 - start1, MPI_INT, edge_map, recvCounts, displs, MPI_INT, MPI_COMM_WORLD, &req[3]);
 
         MPI_Waitall(3, req, MPI_STATUS_IGNORE);  // first_edge + destination + weight
+        MPI_Wait(&req[3], MPI_STATUS_IGNORE);    // edge_map
 
         iteration++;
     }
 
-    // MST reduce
-    MPI_Iallreduce(MPI_IN_PLACE, MST, &req[0]);
+    // MST gather
+    compute_recvCounts_dipls(recvCounts, displs, 0, internal_index, rank);
+    MPI_Igatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, MST, recvCounts, displs, MPI_INT, 0, MPI_COMM_WORLD, &req[0]);
 
-    for (i = 1; i < iteration; ++i) free_graph(pastG[i]);
-    free(pastG);
+    free(edge_map);
+    free(edge_map_tmp);
+    for (i = 1; i < iteration; ++i) free_graph(graph[i]);
+    free(graph);
     free(min_edge);
     free(parent);
     free(recvCounts);
-    free(displs);
     free(recvCounts1);
+    free(displs);
     free(displs1);
 
     MPI_Wait(&req[0], MPI_STATUS_IGNORE);
@@ -185,12 +201,12 @@ void find_min_edge(const Graph_CSR *G, TYP *min_edge, const int i) {
     min_edge[i] = min;
 }
 
-void merge_edges(const Graph_CSR *G, TYP *MST, TYP *min_edge, TYP *parent, const int i) {
+void merge_edge(const Graph_CSR *G, TYP *MST, const int *map_edge, TYP *min_edge, TYP *parent, const int i, int *internal_index) {
     int dest = G->destination[i];
     int dest_dest = G->destination[min_edge[dest]];
     if (dest >= 0 && !(dest < i && dest_dest == i)) {  // if init + if mirror only save the one pointing to the smalles one
         parent[i] = dest;                              // mfset init
-        MST[i] = min_edge[i];                          // MST store // PROBLEMMMMMMMMMM
+        MST[*internal_index++] = map_edge[i];          // MST store
     } else {                                           //
         parent[i] = i;                                 // mfset init
     }
@@ -214,12 +230,14 @@ void super_vertex_init(TYP *super_vertex, const TYP *parent, const TYP start, co
 }
 
 void mpi_exclusive_prefix_sum(int *send, int *recv, const TYP start, const TYP stop) {
-    int i, local_sum = send[stop - 1], offset = 0;
+    int i, local_sum = 0, offset = 0, tmp;
 
-    recv[0] = 0;
-    FOR(i, start + 1, stop) recv[i] = recv[i - 1] + send[i - 1];  // Compute local prefix sum
+    FOR(i, start, stop) {  // Compute local prefix sum
+        tmp = send[i];
+        recv[i] = local_sum;
+        local_sum += tmp;
+    }
 
-    local_sum += recv[stop - 1];
     MPI_Exscan(&local_sum, &offset, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);  // get offset
 
     FOR(i, start + 1, stop) recv[i] += offset;  // apply offset
@@ -259,9 +277,9 @@ int last_binary_search(const TYP *super_vertex, int size, int lookfor) {
     return right;
 }
 
-void reduce_edges(const Graph_CSR *Gin, Graph_CSR *Gout, const TYP *parent, const TYP *super_vertex, const TYP start, const TYP stop) {
+void reduce_edges(const Graph_CSR *Gin, Graph_CSR *Gout, const TYP *parent, const TYP *super_vertex, const int *edge_map, int *edge_map_tmp, const TYP start, const TYP stop) {
     int i, k, from, to, master_parent;
-    int first_vertex_in = last_binary_search(super_vertex, Gin->V, start);  // cheap heuristic 1
+    int first_vertex_in = last_binary_search(super_vertex, Gin->V, start);  // cheap heuristic 1 // to be revisited ---------------------------
 
     int edge_out = Gout->first_edge[start];
     int tot_edge = Gout->first_edge[stop] + Gout->out_degree[stop];
@@ -270,11 +288,12 @@ void reduce_edges(const Graph_CSR *Gin, Graph_CSR *Gout, const TYP *parent, cons
         if (master_parent >= start && master_parent < stop) {  // if vertex parent is within range
             from = Gin->first_edge[i];
             to = from + Gin->out_degree[i];
-            FOR(k, from, to) {                                       // for edges of that vertex
-                if (parent[Gin->destination[k]] != master_parent) {  // if the edge crosses parent
-                    Gout->destination[edge_out] = Gin->destination[k];
-                    Gout->weight[edge_out] = Gin->weight[k];
-                    edge_out++;
+            FOR(k, from, to) {                                          // for edges of that vertex
+                if (parent[Gin->destination[k]] != master_parent) {     // if edge cross parent
+                    Gout->destination[edge_out] = Gin->destination[k];  // add edge
+                    Gout->weight[edge_out] = Gin->weight[k];            //
+                    edge_map_tmp[edge_out] = edge_map[k];               // sync mapping
+                    edge_out++;                                         // increment counter
                 }
             }
             if (edge_out >= tot_edge) break;  // cheap heuristic 2
