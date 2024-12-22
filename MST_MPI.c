@@ -1,3 +1,4 @@
+#include <math.h>
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,20 +27,43 @@ int main(int argc, char **argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &commsz);
 
+    int destination[] = {1, 3, 4, 0, 2, 4, 2, 4, 6, 0, 4, 5, 0, 1, 2, 3, 5, 6, 3, 4, 6, 2, 4, 6};
+    int weight[] = {4, 12, 9, 4, 8, 7, 8, 5, 2, 12, 3, 6, 9, 7, 5, 3, 1, 13, 6, 1, 11, 2, 13, 11};
+    int first_edge[] = {0, 3, 6, 9, 12, 18, 21};
+    int out_degree[] = {3, 3, 3, 3, 6, 3, 3};
+
     // converter from other formats
-    Graph_CSR G;
-    TYP *MST;
-    // broadcasting
+    Graph_CSR *G = default_graph(12, 7);
+    for (int i = 0; i < G->E * 2; ++i) {
+        G->destination[i] = destination[i];
+        G->weight[i] = weight[i];
+    }
+    for (int i = 0; i < G->V; ++i) {
+        G->first_edge[i] = first_edge[i];
+        G->out_degree[i] = out_degree[i];
+    }
 
-    boruvka(&G, rank, commsz, MST);
-    // reduce mst?
+    TYP *MST = malloc(((G->V - 1)) * sizeof(TYP));
 
+    boruvka(G, rank, commsz, MST);
+
+    if (!rank) {
+        int tot;
+        for (int i = 0; i < G->V - 1; ++i) {
+            tot += weight[MST[i]];
+            printf("%d ", MST[i]);
+        }
+        printf("\ntot= %d", tot);
+    }
+
+    free(MST);
     MPI_Finalize();
     return 0;
 }
 
 void compute_start_stop_vertices(const Graph_CSR *, const int, const int, TYP *, TYP *);
 void compute_start_stop_edges(const Graph_CSR *, const TYP, const TYP, TYP *, TYP *);
+void compute_recvCounts_dipls(const int, const int, const int, int *, int *);
 void compute_partitions(const Graph_CSR *, const int, const int, TYP *, TYP *, int *, int *);
 void find_min_edge(const Graph_CSR *, const int, const int, TYP *);
 void merge_edge(const Graph_CSR *, const int *, const int, const int, TYP *, TYP *, TYP *, int *);
@@ -99,7 +123,7 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST) {
 
         // remove mirrors + merge mfset
         MPI_Wait(&req[0], MPI_STATUS_IGNORE);  // edge_map
-        merge_edge(OLD_G, MST, edge_map, start_v, stop_v, min_edge, parent, &internal_index);
+        merge_edge(OLD_G, edge_map, start_v, stop_v, MST, min_edge, parent, &internal_index);
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, parent, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD);
 
         // compression
@@ -117,8 +141,8 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST) {
         mpi_exclusive_prefix_sum(start_v, stop_v, super_vertex, super_vertex);  // in place
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, super_vertex, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD);
 
-        FOR(i, start_v, stop_v) parent[i] = super_vertex[parent[i]];                                                       // improves locality, not sure if needed
-        MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, parent, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD, req[0]);  // by inverting order we could make things better with igatherv
+        FOR(i, start_v, stop_v) parent[i] = super_vertex[parent[i]];                                                        // improves locality, not sure if needed
+        MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, parent, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD, &req[0]);  // by inverting order we could make things better with igatherv
 
         /// NEW GRAPH
         // out edges
@@ -137,7 +161,7 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST) {
 
         // first edge
         mpi_exclusive_prefix_sum(start_v, stop_v, NEW_G->out_degree, NEW_G->first_edge);
-        MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->first_edge, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD, req[0]);
+        MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->first_edge, recvCounts, displs, MPI_TYP, MPI_COMM_WORLD, &req[0]);
 
         // edges
         reduce_edges(OLD_G, parent, super_vertex, edge_map, start_v, stop_v, NEW_G, edge_map_tmp);
@@ -198,7 +222,7 @@ void compute_recvCounts_dipls(const int start, const int stop, const int rank, i
 
 void compute_partitions(const Graph_CSR *G, const int rank, const int commsz, TYP *start_v, TYP *stop_v, int *recvCounts, int *displs) {
     compute_start_stop_vertices(G, rank, commsz, start_v, stop_v);
-    compute_recvCounts_dipls(recvCounts, displs, *start_v, *stop_v, rank);
+    compute_recvCounts_dipls(*start_v, *stop_v, rank, recvCounts, displs);
 }
 
 void find_min_edge(const Graph_CSR *G, const int start_v, const int stop_v, TYP *min_edge) {

@@ -21,7 +21,7 @@ typedef struct Graph_al {
 // CSR
 // duplicate edges
 typedef struct Graph_CSR {
-    const int E, V;
+    int E, V;
     int* destination;  // array of size E, maps each edge destination its destination
     int* weight;       // array of size E, maps each edge to its weight
     int* first_edge;   // array of size V, maps each first to edge first edge
@@ -36,7 +36,7 @@ Graph_CSR* default_graph(const int E, const int V) {
         perror("malloc failed");
         exit(EXIT_FAILURE);
     }
-    *g = (Graph_CSR){.E = E, .V = V, .destination = malloc(E * sizeof(int)), .weight = malloc(E * sizeof(int)), .first_edge = malloc(V * sizeof(int)), .out_degree = malloc(V * sizeof(int))};
+    *g = (Graph_CSR){.E = E, .V = V, .destination = malloc(E * 2 * sizeof(int)), .weight = malloc(E * 2 * sizeof(int)), .first_edge = malloc(V * sizeof(int)), .out_degree = malloc(V * sizeof(int))};
     return g;
 }
 
