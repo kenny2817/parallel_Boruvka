@@ -19,7 +19,7 @@
 typedef int TYP;
 #define MPI_TYP MPI_INT
 
-void boruvka(const Graph_CSR *, const int, const int, TYP *, MPI_Comm);
+void boruvka(const Graph_CSR *, const int, const int, TYP *, const MPI_Comm);
 
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
@@ -68,13 +68,13 @@ int main(int argc, char **argv) {
 
 void compute_start_stop(const int, const int, const int, TYP *, TYP *);
 void compute_start_stop_edges(const Graph_CSR *, const TYP, const TYP, TYP *, TYP *);
-void compute_recvCounts_dipls(const int, const int, const int, int *, int *, MPI_Comm);
-void compute_partitions(const Graph_CSR *, const int, const int, TYP *, TYP *, int *, int *, MPI_Comm);
+void compute_recvCounts_dipls(const int, const int, const int, int *, int *, const MPI_Comm);
+void compute_partitions(const Graph_CSR *, const int, const int, TYP *, TYP *, int *, int *, const MPI_Comm);
 void find_min_edge(const Graph_CSR *, const int, const int, TYP *);
 void merge_edge(const Graph_CSR *, const int *, const int, const int, TYP *, TYP *, TYP *, int *);
 void parent_compression(const int, const int, TYP *);
 void super_vertex_init(const TYP *, const TYP, const TYP, TYP *);
-void mpi_exclusive_prefix_sum(const TYP, const TYP, const int, int *, int *, MPI_Comm);
+void mpi_exclusive_prefix_sum(const TYP, const TYP, const int, int *, int *, const MPI_Comm);
 void out_degree_init(const Graph_CSR *, const TYP *, const TYP, const TYP, int *, int *);
 Graph_CSR *allocate_new_graph(const int *, const int, const int);
 void reduce_edges(const Graph_CSR *, const TYP *, const int *, const TYP, const TYP, const TYP, const TYP, Graph_CSR *, int *);
@@ -89,10 +89,10 @@ void reduce_edges(const Graph_CSR *, const TYP *, const int *, const TYP, const 
 // 8: Count new edges
 // 9: Assign edge segments to new vertices
 // 10: Insert new edges
-void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, MPI_Comm comm) {
+void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, const MPI_Comm comm) {
     int iteration, next_iter_v, next_iter_e, internal_index = 0;
     TYP start_v, stop_v, start_e, stop_e, i;
-    MPI_Request req[3];
+    MPI_Request req[4];
 
     Graph_CSR **graph = (Graph_CSR **)malloc(((int)log2((float)G->V) + 1) * sizeof(Graph_CSR *));
     TYP *min_edge = malloc(G->V * sizeof(TYP));  // if multiple of rank -> less overhead
@@ -226,7 +226,6 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, MPI
         // allocation
         NEW_G = allocate_new_graph(new_out_degree, next_iter_e, next_iter_v);
         compute_partitions(NEW_G, rank, commsz, &start_v, &stop_v, recvCounts, displs, comm);  // new start + stop + recvCounts + displs
-                                                                                               // first edge
         mpi_exclusive_prefix_sum(start_v, stop_v, rank, NEW_G->out_degree, NEW_G->first_edge, comm);
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->first_edge, recvCounts, displs, MPI_TYP, comm, &req[0]);
         if (DEBUG) {
@@ -241,7 +240,6 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, MPI
         compute_recvCounts_dipls(start_e, stop_e, rank, recvCounts1, displs1, comm);
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->destination, recvCounts1, displs1, MPI_TYP, comm, &req[1]);
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->weight, recvCounts1, displs1, MPI_TYP, comm, &req[2]);
-        MPI_Waitall(3, req, MPI_STATUS_IGNORE);  // first_edge + destination + weight
         if (DEBUG) {
             printf("[ %d | %d %d | %2d %2d | %2d ] rcv: [ ", rank, start_v, stop_v, start_e, stop_e, stop_e - start_e + 1);
             FOR(i, 0, commsz - 1) printf("%d ", recvCounts1[i]);
@@ -253,11 +251,16 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, MPI
             FOR(i, stop_e + 1, NEW_G->E - 1) printf(" ___ ");
             printf("]\n");
         }
-        MPI_Barrier(comm);
         MPI_Iallgatherv(&edge_map_tmp[start_e], stop_e - start_e + 1, MPI_INT, edge_map, recvCounts1, displs1, MPI_INT, comm, &req[3]);  // da gestire
-        MPI_Wait(&req[3], MPI_STATUS_IGNORE);                                                                                            // edge_map
+        MPI_Waitall(4, req, MPI_STATUS_IGNORE);                                                                                          // first_edge + destination + weight + edge_map
+        if (DEBUG) {
+            printf("[%d] | edge: [ ", rank);
+            FOR(i, 0, NEW_G->E - 1) printf("%2d ", edge_map[i]);
+            printf("]\n");
+        }
 
         iteration++;
+
         break;
     }
 
@@ -305,7 +308,7 @@ void compute_start_stop_edges(const Graph_CSR *G, const TYP start_v, const TYP s
     }
 }
 
-void compute_recvCounts_dipls(const int start, const int stop, const int rank, int *recvCounts, int *displs, MPI_Comm comm) {
+void compute_recvCounts_dipls(const int start, const int stop, const int rank, int *recvCounts, int *displs, const MPI_Comm comm) {
     recvCounts[rank] = stop - start + 1;
     MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, recvCounts, 1, MPI_INT, comm);
     MPI_Exscan(&recvCounts[rank], &displs[rank], 1, MPI_INT, MPI_SUM, comm);
@@ -313,7 +316,7 @@ void compute_recvCounts_dipls(const int start, const int stop, const int rank, i
     MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, displs, 1, MPI_INT, comm);
 }
 
-void compute_partitions(const Graph_CSR *G, const int rank, const int commsz, TYP *start_v, TYP *stop_v, int *recvCounts, int *displs, MPI_Comm comm) {
+void compute_partitions(const Graph_CSR *G, const int rank, const int commsz, TYP *start_v, TYP *stop_v, int *recvCounts, int *displs, const MPI_Comm comm) {
     compute_start_stop(G->V, rank, commsz, start_v, stop_v);
     compute_recvCounts_dipls(*start_v, *stop_v, rank, recvCounts, displs, comm);
 }
@@ -364,7 +367,7 @@ void super_vertex_init(const TYP *parent, const TYP start, const TYP stop, TYP *
         super_vertex[parent[i]] = 1;
 }
 
-void mpi_exclusive_prefix_sum(const int start, const int stop, const int rank, int *send, int *recv, MPI_Comm comm) {
+void mpi_exclusive_prefix_sum(const TYP start, const TYP stop, const int rank, int *send, int *recv, const MPI_Comm comm) {
     int i, local_sum = 0, offset = 0, tmp;
 
     FOR(i, start, stop) {  // Compute local prefix sum
@@ -434,113 +437,3 @@ void reduce_edges(const Graph_CSR *Gin, const TYP *parent, const int *edge_map, 
         }
     }
 }
-
-// raddoppio edges
-// aggiusta indici
-// processi che non lavorano??????????
-
-// mpirun -np 4 ./test_0
-// [1] 2 - 3
-// [2] 4 - 5
-// [3] 6 - 6
-// [0] 0 - 1
-// minedge: [  0  3  8 10 16 19 21 ]
-// parent:  [  0  0  2  4  4  4  2 ]
-// compres: [  0  0  2  4  4  4  2 ]
-// supvert: [  1  0  1  0  1  0  0 ]
-// supvert: [  0  1  1  2  2  3  3 ]
-// [3] e: 1 outdeg:  [  0  1  0 ]
-// [1] e: 2 outdeg:  [  0  1  1 ]
-// [2] e: 5 outdeg:  [  0  0  5 ]
-// suparnt: [  0  0  1  2  2  2  1 ]
-// next V:  [ 3 ]
-// [0] e: 4 outdeg:  [  4  0  0 ]
-// edges:   [ 12 ]
-// outdeg:  [  4  2  6 ]
-// firedg:  [ 0 4 6 ]
-// [ 3] compute : 1 0 | 1 0
-// firedg:  [ 0 4 6 ]
-// [ 0] compute : 0 0 | 0 3
-// firedg:  [ 0 4 6 ]
-// [ 1] compute : 1 1 | 4 5
-// firedg:  [ 0 4 6 ]
-// [ 2] compute : 2 2 | 6 11
-// [ 3 | 1 0 |  1  0 |  0 ] rcv: [ 4 2 6 0 ] | dsps: [ 0 4 6 12 ] | tmp: [   __  ___  ___  ___  ___  ___  ___  ___  ___  ___  ___  ___ ]
-// [ 0 | 0 0 |  0  3 |  4 ] rcv: [ 4 2 6 0 ] | dsps: [ 0 4 6 12 ] | tmp: [    1    2    4    5  ___  ___  ___  ___  ___  ___  ___  ___ ]
-// [ 2 | 2 2 |  6 11 |  6 ] rcv: [ 4 2 6 0 ] | dsps: [ 0 4 6 12 ] | tmp: [   __   __   __   __   __   __    9   12   13   14   17   20 ]
-// [ 1 | 1 1 |  4  5 |  2 ] rcv: [ 4 2 6 0 ] | dsps: [ 0 4 6 12 ] | tmp: [   __   __   __   __    7   22  ___  ___  ___  ___  ___  ___ ]
-// *** stack smashing detected ***: terminated
-// *** stack smashing detected ***: terminated
-// *** stack smashing detected ***: terminated
-// *** stack smashing detected ***: terminated
-// [kenny-XPS-15-9530:09740] *** Process received signal ***
-// [kenny-XPS-15-9530:09737] *** Process received signal ***
-// [kenny-XPS-15-9530:09737] Signal: Aborted (6)
-// [kenny-XPS-15-9530:09737] Signal code:  (-6)
-// [kenny-XPS-15-9530:09738] *** Process received signal ***
-// [kenny-XPS-15-9530:09738] Signal: Aborted (6)
-// [kenny-XPS-15-9530:09738] Signal code:  (-6)
-// [kenny-XPS-15-9530:09739] *** Process received signal ***
-// [kenny-XPS-15-9530:09739] Signal: Aborted (6)
-// [kenny-XPS-15-9530:09739] Signal code:  (-6)
-// [kenny-XPS-15-9530:09740] Signal: Aborted (6)
-// [kenny-XPS-15-9530:09740] Signal code:  (-6)
-// [kenny-XPS-15-9530:09740] [ 0] [kenny-XPS-15-9530:09737] [ 0] [kenny-XPS-15-9530:09738] [ 0] [kenny-XPS-15-9530:09739] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45320)[0x70e930245320]
-// [kenny-XPS-15-9530:09738] [ 1] /lib/x86_64-linux-gnu/libc.so.6(+0x45320)[0x78d8d0e45320]
-// [kenny-XPS-15-9530:09740] [ 1] /lib/x86_64-linux-gnu/libc.so.6(+0x45320)[0x7af91ec45320]
-// [kenny-XPS-15-9530:09737] [ 1] /lib/x86_64-linux-gnu/libc.so.6(+0x45320)[0x7172d3245320]
-// [kenny-XPS-15-9530:09739] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x7af91ec9eb1c]
-// [kenny-XPS-15-9530:09737] [ 2] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x70e93029eb1c]
-// [kenny-XPS-15-9530:09738] [ 2] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x78d8d0e9eb1c]
-// [kenny-XPS-15-9530:09740] [ 2] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x7172d329eb1c]
-// [kenny-XPS-15-9530:09739] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x78d8d0e4526e]
-// [kenny-XPS-15-9530:09740] [ 3] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x7af91ec4526e]
-// [kenny-XPS-15-9530:09737] [ 3] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x70e93024526e]
-// [kenny-XPS-15-9530:09738] [ 3] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x7172d324526e]
-// [kenny-XPS-15-9530:09739] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x78d8d0e288ff]
-// [kenny-XPS-15-9530:09740] [ 4] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x7af91ec288ff]
-// [kenny-XPS-15-9530:09737] [ 4] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x70e9302288ff]
-// [kenny-XPS-15-9530:09738] [ 4] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x7172d32288ff]
-// [kenny-XPS-15-9530:09739] [ 4] /lib/x86_64-linux-gnu/libc.so.6(+0x297b6)[0x70e9302297b6]
-// [kenny-XPS-15-9530:09738] [ 5] /lib/x86_64-linux-gnu/libc.so.6(+0x297b6)[0x78d8d0e297b6]
-// [kenny-XPS-15-9530:09740] [ 5] /lib/x86_64-linux-gnu/libc.so.6(+0x297b6)[0x7af91ec297b6]
-// [kenny-XPS-15-9530:09737] [ 5] /lib/x86_64-linux-gnu/libc.so.6(+0x297b6)[0x7172d32297b6]
-// [kenny-XPS-15-9530:09739] [ 5] /lib/x86_64-linux-gnu/libc.so.6(+0x136c19)[0x78d8d0f36c19]
-// [kenny-XPS-15-9530:09740] [ 6] /lib/x86_64-linux-gnu/libc.so.6(+0x136c19)[0x7af91ed36c19]
-// [kenny-XPS-15-9530:09737] [ 6] /lib/x86_64-linux-gnu/libc.so.6(+0x136c19)[0x70e930336c19]
-// [kenny-XPS-15-9530:09738] [ 6] /lib/x86_64-linux-gnu/libc.so.6(+0x136c19)[0x7172d3336c19]
-// [kenny-XPS-15-9530:09739] [ 6] /lib/x86_64-linux-gnu/libc.so.6(+0x137ea4)[0x70e930337ea4]
-// [kenny-XPS-15-9530:09738] [ 7] ./test_0(+0x2ec1)[0x60cebf802ec1]
-// [kenny-XPS-15-9530:09738] [ 8] ./test_0(+0x19ad)[0x60cebf8019ad]
-// [kenny-XPS-15-9530:09738] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x137ea4)[0x78d8d0f37ea4]
-// [kenny-XPS-15-9530:09740] [ 7] ./test_0(+0x2ec1)[0x5b38e6da2ec1]
-// [kenny-XPS-15-9530:09740] [ 8] ./test_0(+0x19ad)[0x5b38e6da19ad]
-// [kenny-XPS-15-9530:09740] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x137ea4)[0x7af91ed37ea4]
-// [kenny-XPS-15-9530:09737] [ 7] ./test_0(+0x2ec1)[0x5895bbef8ec1]
-// [kenny-XPS-15-9530:09737] [ 8] ./test_0(+0x19ad)[0x5895bbef79ad]
-// [kenny-XPS-15-9530:09737] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x137ea4)[0x7172d3337ea4]
-// [kenny-XPS-15-9530:09739] [ 7] ./test_0(+0x2ec1)[0x59b310393ec1]
-// [kenny-XPS-15-9530:09739] [ 8] ./test_0(+0x19ad)[0x59b3103929ad]
-// [kenny-XPS-15-9530:09739] [ 9] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x78d8d0e2a1ca]
-// [kenny-XPS-15-9530:09740] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x7af91ec2a1ca]
-// [kenny-XPS-15-9530:09737] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x70e93022a1ca]
-// [kenny-XPS-15-9530:09738] [10] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x78d8d0e2a28b]
-// [kenny-XPS-15-9530:09740] [11] ./test_0(+0x1345)[0x5b38e6da1345]
-// [kenny-XPS-15-9530:09740] *** End of error message ***
-// /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x7172d322a1ca]
-// [kenny-XPS-15-9530:09739] [10] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7172d322a28b]
-// [kenny-XPS-15-9530:09739] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x70e93022a28b]
-// [kenny-XPS-15-9530:09738] [11] ./test_0(+0x1345)[0x60cebf801345]
-// [kenny-XPS-15-9530:09738] *** End of error message ***
-// /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7af91ec2a28b]
-// [kenny-XPS-15-9530:09737] [11] ./test_0(+0x1345)[0x5895bbef7345]
-// [kenny-XPS-15-9530:09737] *** End of error message ***
-// [11] ./test_0(+0x1345)[0x59b310392345]
-// [kenny-XPS-15-9530:09739] *** End of error message ***
-// --------------------------------------------------------------------------
-// Primary job  terminated normally, but 1 process returned
-// a non-zero exit code. Per user-direction, the job has been aborted.
-// --------------------------------------------------------------------------
-// --------------------------------------------------------------------------
-// mpirun noticed that process rank 1 with PID 0 on node kenny-XPS-15-9530 exited on signal 6 (Aborted).
-// --------------------------------------------------------------------------
