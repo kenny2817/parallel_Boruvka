@@ -14,6 +14,7 @@
 
 #define INPUT "graph.txt"
 #define OUTPUT "mst.txt"
+
 #define DEBUG 0
 
 typedef int TYP;
