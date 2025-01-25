@@ -83,8 +83,10 @@ Graph_CSR* init_graph_from_file(const char* input) {
         fscanf(f, "%d %d %d", &v0, &v1, &w);
         G->destination[G->first_edge[v0]] = v1;
         G->destination[G->first_edge[v1]] = v0;
-        G->weight[G->first_edge[v0]++] = w;
-        G->weight[G->first_edge[v1]++] = w;
+        G->weight[G->first_edge[v0]] = w;
+        G->weight[G->first_edge[v1]] = w;
+        G->first_edge[v0]++;
+        G->first_edge[v1]++;
     }
 
     // first_edge reset
