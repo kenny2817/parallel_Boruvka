@@ -12,10 +12,7 @@
 #define OLD_G graph[iteration]
 #define NEW_G graph[iteration + 1]
 
-#define INPUT "graph.txt"
-#define OUTPUT "mst.txt"
-
-#define DEBUG 1
+#define DEBUG 0
 
 typedef int TYP;
 #define MPI_TYP MPI_INT
@@ -28,6 +25,12 @@ int main(int argc, char **argv) {
     int rank, commsz;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &commsz);
+
+    if (argc < 2) {
+        if (!rank) perror("usage: mst_mpi <graph.txt>");
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
     //                   b  d  e  a  c  e  b  e  g  a  e  f  a  b  c  d  f  g  d  e  g  c  e  f
     // int destination[] = {1, 3, 4, 0, 2, 4, 1, 4, 6, 0, 4, 5, 0, 1, 2, 3, 5, 6, 3, 4, 6, 2, 4, 5};
     // thread      | 0               | 1                | 2                          | 3        |
@@ -51,30 +54,30 @@ int main(int argc, char **argv) {
     TYP *MST = NULL;
 
     if (!rank) {
-        G = init_graph_from_file(INPUT);
+        G = init_graph_from_file(argv[1]);
         MST = malloc((G->V - 1) * sizeof(TYP));
         MPI_Bcast_GraphCSR(&G, MPI_COMM_WORLD);
     } else {
         MPI_Bcast_GraphCSR(&G, MPI_COMM_WORLD);
     }
 
-    // if (!rank && DEBUG) {
-    //     int i;
-    //     printf("Graph || E: %d | V: %d\n", G->E, G->V);
-    //     printf("dest:   [ ");
-    //     FOR(i, 0, G->E - 1) printf("%2d ", G->destination[i]);
-    //     printf("]\nweight: [ ");
-    //     FOR(i, 0, G->E - 1) printf("%2d ", G->weight[i]);
-    //     printf("]\noutdeg: [ ");
-    //     FOR(i, 0, G->V - 1) printf("%2d ", G->out_degree[i]);
-    //     printf("]\nfiredg: [ ");
-    //     FOR(i, 0, G->V - 1) printf("%2d ", G->first_edge[i]);
-    //     printf("]\n");
-    // }
+    if (!rank && DEBUG) {
+        int i;
+        printf("Graph || E: %d | V: %d\n", G->E, G->V);
+        printf("dest:   [ ");
+        FOR(i, 0, G->E - 1) printf("%2d ", G->destination[i]);
+        printf("]\nweight: [ ");
+        FOR(i, 0, G->E - 1) printf("%2d ", G->weight[i]);
+        printf("]\noutdeg: [ ");
+        FOR(i, 0, G->V - 1) printf("%2d ", G->out_degree[i]);
+        printf("]\nfiredg: [ ");
+        FOR(i, 0, G->V - 1) printf("%2d ", G->first_edge[i]);
+        printf("]\n");
+    }
 
     boruvka(G, rank, commsz, MST, MPI_COMM_WORLD);
 
-    if (!rank) {
+    if (!rank) {  // file? visual?
         int tot;
         printf("MST: [ ");
         for (int i = 0; i < G->V - 1; ++i) {
@@ -103,6 +106,7 @@ void out_degree_init(const Graph_CSR *, const TYP *, const TYP, const TYP, int *
 Graph_CSR *allocate_new_graph(const int *, const int, const int);
 void reduce_edges(const Graph_CSR *, const TYP *, const int *, const TYP, const TYP, const TYP, const TYP, Graph_CSR *, int *);
 
+// LOGIC
 // while number of vertices > 1 do
 // 2: Find minimum edge per vertex
 // 3: Remove mirrored edges
@@ -123,13 +127,14 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
     TYP *min_edge = malloc(G->V * sizeof(TYP));
     TYP *parent = malloc(G->V * sizeof(TYP));
     TYP *super_vertex = calloc(G->V, sizeof(TYP));
-    int *recvCounts = calloc(commsz, sizeof(int));
+    int *recvCounts = calloc(commsz, sizeof(int));  // init to 0
     int *recvCounts1 = malloc(commsz * sizeof(int));
     int *displs = malloc(commsz * sizeof(int));
     int *displs1 = malloc(commsz * sizeof(int));
     int *edge_map = malloc(G->E * sizeof(int));
     int *edge_map_tmp = malloc(G->E * sizeof(int));
 
+    // to implement if better
     // Graph_CSR **graph;
     // TYP *min_edge, *parent, *super_vertex;
     // int *recvCounts, *recvCounts1, *displs, *displs1;
@@ -155,7 +160,7 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
     OLD_G = G;
 
     compute_start_stop(OLD_G->V, rank, commsz, &start_v, &stop_v);
-    if (DEBUG) printf("[%d] %d - %d\n", rank, start_v, stop_v);  // debug
+    if (DEBUG) printf("[%d] %d - %d\n", rank, start_v, stop_v);
     compute_start_stop(OLD_G->E, rank, commsz, &start_e, &stop_e);
     FOR(i, start_e, stop_e) edge_map[i] = i;
     compute_recvCounts_dipls(start_e, stop_e, rank, recvCounts, displs, comm);
@@ -168,7 +173,7 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
         // find min edgess for each v || uneven workload
         find_min_edge(OLD_G, start_v, stop_v, min_edge);
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, min_edge, recvCounts, displs, MPI_TYP, comm);
-        if (!rank && DEBUG) {  // debug
+        if (!rank && DEBUG) {
             printf("minedge: [ ");
             FOR(i, 0, OLD_G->V - 1) printf("%2d ", min_edge[i]);
             printf("]\n");
@@ -177,7 +182,7 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
         // remove mirrors + merge mfset
         merge_edge(OLD_G, edge_map, start_v, stop_v, MST_tmp, min_edge, parent, &internal_index);
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, parent, recvCounts, displs, MPI_TYP, comm);
-        if (!rank && DEBUG) {  // debug
+        if (!rank && DEBUG) {
             printf("parent:  [ ");
             FOR(i, 0, OLD_G->V - 1) printf("%2d ", parent[i]);
             printf("]\n");
@@ -189,7 +194,7 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
         // hibrid seem difficult as there would be race conditions
         parent_compression(start_v, stop_v, parent);
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, parent, recvCounts, displs, MPI_TYP, comm);
-        if (!rank && DEBUG) {  // debug
+        if (!rank && DEBUG) {
             printf("compres: [ ");
             FOR(i, 0, OLD_G->V - 1) printf("%2d ", parent[i]);
             printf("]\n");
@@ -197,10 +202,10 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
 
         // supervertex init
         super_vertex_init(parent, start_v, stop_v, super_vertex);
-        MPI_Allreduce(MPI_IN_PLACE, super_vertex, OLD_G->V, MPI_TYP, MPI_MAX, comm);  // could be better as less complex
+        MPI_Allreduce(MPI_IN_PLACE, super_vertex, OLD_G->V, MPI_TYP, MPI_MAX, comm);  // could be better as less complex gather or init necessary
         // MPI_Reduce_scatter(MPI_IN_PLACE, super_vertex, recvCounts, MPI_TYP, MPI_SUM, MPI_COMM_WORLD);
         next_iter_v = -super_vertex[OLD_G->V - 1];  // ensure correct size of next iteration
-        if (!rank && DEBUG) {                       // debug
+        if (!rank && DEBUG) {
             printf("supvert: [ ");
             FOR(i, 0, OLD_G->V - 1) printf("%2d ", super_vertex[i]);
             printf("]\n");
@@ -208,7 +213,7 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
 
         mpi_exclusive_prefix_sum(start_v, stop_v, rank, super_vertex, super_vertex, comm);  // in place
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, super_vertex, recvCounts, displs, MPI_TYP, comm);
-        if (!rank && DEBUG) {  // debug
+        if (!rank && DEBUG) {
             printf("exsupv:  [ ");
             FOR(i, 0, OLD_G->V - 1) printf("%2d ", super_vertex[i]);
             printf("]\n");
@@ -225,12 +230,12 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
         int *new_out_degree = calloc(next_iter_v, sizeof(int));
         next_iter_e = 0;
         MPI_Wait(&req[0], MPI_STATUS_IGNORE);  // parent
-        if (!rank && DEBUG) {                  // debug
+        if (!rank && DEBUG) {
             printf("suparnt: [ ");
             FOR(i, 0, OLD_G->V - 1) printf("%2d ", parent[i]);
             printf("]\nnext V:  [ %d ]\n", next_iter_v);
         }
-        if (next_iter_v <= 1) break;  // early exit here i suppose? -------------- not connected might pose a threat
+        if (next_iter_v <= 1 || next_iter_v == OLD_G->V) break;  // early exit here i suppose? -------------- not connected might pose a threat (2 cond?)
         out_degree_init(OLD_G, parent, start_v, stop_v, &next_iter_e, new_out_degree);
         MPI_Iallreduce(MPI_IN_PLACE, new_out_degree, next_iter_v, MPI_TYP, MPI_SUM, comm, &req[0]);
         MPI_Iallreduce(MPI_IN_PLACE, &next_iter_e, 1, MPI_TYP, MPI_SUM, comm, &req[1]);
@@ -252,33 +257,34 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
         compute_recvCounts_dipls(start_e, stop_e, rank, recvCounts1, displs1, comm);
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->destination, recvCounts1, displs1, MPI_TYP, comm, &req[1]);
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->weight, recvCounts1, displs1, MPI_TYP, comm, &req[2]);
-        // if (DEBUG) {
-        //     printf("[ %d | %d %d | %2d %2d | %2d ] rcv: [ ", rank, start_v, stop_v, start_e, stop_e, stop_e - start_e + 1);
-        //     FOR(i, 0, commsz - 1) printf("%d ", recvCounts1[i]);
-        //     printf("] | dsps: [ ");
-        //     FOR(i, 0, commsz - 1) printf("%d ", displs1[i]);
-        //     printf("] | tmp: [ ");
-        //     FOR(i, 1, start_e) printf("  __ ");
-        //     FOR(i, start_e, stop_e) printf("%4d ", edge_map_tmp[i]);
-        //     FOR(i, stop_e + 1, NEW_G->E - 1) printf(" ___ ");
-        //     printf("]\n");
-        // }
+        if (DEBUG) {
+            printf("[ %d | %d %d | %2d %2d | %2d ] rcv: [ ", rank, start_v, stop_v, start_e, stop_e, stop_e - start_e + 1);
+            FOR(i, 0, commsz - 1) printf("%d ", recvCounts1[i]);
+            printf("] | dsps: [ ");
+            FOR(i, 0, commsz - 1) printf("%d ", displs1[i]);
+            printf("] | tmp: [ ");
+            FOR(i, 1, start_e) printf("  __ ");
+            FOR(i, start_e, stop_e) printf("%4d ", edge_map_tmp[i]);
+            FOR(i, stop_e + 1, NEW_G->E - 1) printf(" ___ ");
+            printf("]\n");
+        }
         MPI_Iallgatherv(&edge_map_tmp[start_e], stop_e - start_e + 1, MPI_INT, edge_map, recvCounts1, displs1, MPI_INT, comm, &req[3]);
-        MPI_Waitall(4, req, MPI_STATUS_IGNORE);  // first_edge + destination + weight + edge_map
-        // if (!rank && DEBUG) {
-        //     printf("edge_map: [ ");
-        //     FOR(i, 0, NEW_G->E - 1) printf("%2d ", edge_map[i]);
-        //     printf("]\nNEW_G || E: %d | V: %d\n", NEW_G->E, NEW_G->V);
-        //     printf("dest:   [ ");
-        //     FOR(i, 0, NEW_G->E - 1) printf("%2d ", NEW_G->destination[i]);
-        //     printf("]\nweight: [ ");
-        //     FOR(i, 0, NEW_G->E - 1) printf("%2d ", NEW_G->weight[i]);
-        //     printf("]\noutdeg: [ ");
-        //     FOR(i, 0, NEW_G->V - 1) printf("%2d ", NEW_G->out_degree[i]);
-        //     printf("]\nfiredg: [ ");
-        //     FOR(i, 0, NEW_G->V - 1) printf("%2d ", NEW_G->first_edge[i]);
-        //     printf("]\n");
-        // }
+        FOR(i, 0, NEW_G->V - 1) super_vertex[i] = 0;  // reset
+        MPI_Waitall(4, req, MPI_STATUS_IGNORE);       // first_edge + destination + weight + edge_map
+        if (!rank && DEBUG) {
+            printf("edge_map: [ ");
+            FOR(i, 0, NEW_G->E - 1) printf("%2d ", edge_map[i]);
+            printf("]\nNEW_G || E: %d | V: %d\n", NEW_G->E, NEW_G->V);
+            printf("dest:   [ ");
+            FOR(i, 0, NEW_G->E - 1) printf("%2d ", NEW_G->destination[i]);
+            printf("]\nweight: [ ");
+            FOR(i, 0, NEW_G->E - 1) printf("%2d ", NEW_G->weight[i]);
+            printf("]\noutdeg: [ ");
+            FOR(i, 0, NEW_G->V - 1) printf("%2d ", NEW_G->out_degree[i]);
+            printf("]\nfiredg: [ ");
+            FOR(i, 0, NEW_G->V - 1) printf("%2d ", NEW_G->first_edge[i]);
+            printf("]\n");
+        }
 
         iteration++;
     }
@@ -307,7 +313,7 @@ void boruvka(const Graph_CSR *G, const int rank, const int commsz, TYP *MST, con
     MPI_Wait(&req[0], MPI_STATUS_IGNORE);
 }
 
-void compute_start_stop(const int size, const int rank, const int commsz, TYP *start_v, TYP *stop_v) {  // missing handling size < commsz (a process does nothing)
+void compute_start_stop(const int size, const int rank, const int commsz, TYP *start_v, TYP *stop_v) {
     int partition = size / commsz;
     int missing = size % commsz;
 
@@ -352,7 +358,7 @@ void find_min_edge(const Graph_CSR *G, const int start_v, const int stop_v, TYP 
         compute_start_stop_edges(G, i, i, &start_e, &stop_e);
         min_edge[i] = start_e;
         FOR(j, start_e + 1, stop_e) {
-            if (G->weight[j] < G->weight[min_edge[i]]) {
+            if (G->weight[j] < G->weight[min_edge[i]] || (G->weight[j] == G->weight[min_edge[i]] && G->destination[j] < G->destination[min_edge[i]])) {
                 min_edge[i] = j;
             }
         }
@@ -374,9 +380,10 @@ void merge_edge(const Graph_CSR *G, const int *map_edge, const int start_v, cons
     }
 }
 
-void parent_compression(const int start, const int stop, TYP *parent) {  // esiste la possibilità che due nonni siano tra loro parenti e quindi si crea uno spinlock?
+void parent_compression(const int start_v, const int stop_v,
+                        TYP *parent) {  // spinlock if all edges arent mirrored and if there is no condition on equal weights (done condition in min_edge, still missing verification on double edges)
     int i, father, grand_father;
-    FOR(i, start, stop) {
+    FOR(i, start_v, stop_v) {
         do {
             parent[i] = parent[parent[i]];  // jump liv
             father = parent[i];
@@ -385,11 +392,9 @@ void parent_compression(const int start, const int stop, TYP *parent) {  // esis
     }
 }
 
-void super_vertex_init(const TYP *parent, const TYP start, const TYP stop, TYP *super_vertex) {
+void super_vertex_init(const TYP *parent, const TYP start_v, const TYP stop_v, TYP *super_vertex) {  // replace in main?
     int i;
-    FOR(i, start, stop)
-    if (parent[i] != -1)  // if not connected
-        super_vertex[parent[i]] = 1;
+    FOR(i, start_v, stop_v) super_vertex[parent[i]] = (parent[i] != -1);
 }
 
 void mpi_exclusive_prefix_sum(const TYP start, const TYP stop, const int rank, int *send, int *recv, const MPI_Comm comm) {
@@ -405,7 +410,7 @@ void mpi_exclusive_prefix_sum(const TYP start, const TYP stop, const int rank, i
     if (rank > 0) FOR(i, start, stop) recv[i] += offset;
 }
 
-void out_degree_init(const Graph_CSR *Gin, const TYP *parent, const TYP start_v, const TYP stop_v, int *next_iter_e, int *new_out_degree) {  // can be restructured to be more efficient
+void out_degree_init(const Graph_CSR *Gin, const TYP *parent, const TYP start_v, const TYP stop_v, int *next_iter_e, int *new_out_degree) {  // can be restructured to be more efficient?
     int i, ii, start_e, stop_e;
     FOR(i, start_v, stop_v) {
         compute_start_stop_edges(Gin, i, i, &start_e, &stop_e);
@@ -418,7 +423,7 @@ void out_degree_init(const Graph_CSR *Gin, const TYP *parent, const TYP start_v,
     }
 }
 
-Graph_CSR *allocate_new_graph(const int *out_degree, const int E, const int V) {
+Graph_CSR *allocate_new_graph(const int *out_degree, const int E, const int V) {  // in graph.c?
     Graph_CSR *G = base_graph(E, V);
     if (!G) printf("allocation err\n");
     G->out_degree = out_degree;
@@ -442,7 +447,8 @@ Graph_CSR *allocate_new_graph(const int *out_degree, const int E, const int V) {
 //     return right;
 // }
 
-void reduce_edges(const Graph_CSR *Gin, const TYP *parent, const int *edge_map, const TYP start_v, const TYP stop_v, const TYP start_e, const TYP stop_e, Graph_CSR *Gout, int *edge_map_tmp) {
+void reduce_edges(const Graph_CSR *Gin, const TYP *parent, const int *edge_map, const TYP start_v, const TYP stop_v, const TYP start_e, const TYP stop_e, Graph_CSR *Gout,
+                  int *edge_map_tmp) {  // verify if the heuristic can be triggered
     int i, k, edge_out = start_e, from, to, master_parent;
     FOR(i, 0, Gin->V - 1) {  // for each possible vertex in Gin
         master_parent = parent[i];
