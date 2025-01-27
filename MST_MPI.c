@@ -7,7 +7,6 @@
 
 #include "graph.h"
 
-#define MAX_EDGES_FOR_VERTIX(vertix) ((vertix * (vertix - 1)) / 2)
 #define FOR(i, start, stop) for (i = start; i <= stop; ++i)
 #define OLD_G graph[iteration]
 #define NEW_G graph[iteration + 1]
