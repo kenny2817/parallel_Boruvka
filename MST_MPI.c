@@ -12,83 +12,12 @@
 #define OLD_G graph[iteration]
 #define NEW_G graph[iteration + 1]
 
-#define DEBUG 1
+#define DEBUG 0
 
 typedef int TYP;
 #define MPI_TYP MPI_INT
 
 void boruvka(Graph_CSR *, const int, const int, TYP *, const MPI_Comm);
-
-void verify_mirror(const Graph_CSR *G) {
-    int *visited = calloc(G->E, sizeof(int));
-
-    int w, found;
-    for (int i = 0; i < G->V; ++i) {
-        for (int j = G->first_edge[i]; j < G->first_edge[i + 1]; ++i) {
-            if (!visited[j]) {
-                visited[j] = 1;
-                w = G->weight[i];
-                found = 0;
-                for (int k = G->first_edge[G->destination[j]]; k < G->first_edge[G->destination[j] + 1]; ++k) {
-                    if (G->destination[k] == i) {
-                        visited[k] = 1;
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) break;
-            }
-        }
-        if (!found) break;
-    }
-
-    printf("mirror0 connection: %d\n", found);
-    for (int i = 0; i < G->E; ++i) visited[i] = 0;
-
-    for (int i = 0; i < G->V; ++i) {
-        for (int j = G->first_edge[i]; j < G->first_edge[i + 1]; ++i) {
-            if (!visited[j]) {
-                visited[j] = 1;
-                w = G->weight[i];
-                found = 0;
-                for (int k = G->first_edge[G->destination[j]]; k < G->first_edge[G->destination[j] + 1]; ++k) {
-                    if (G->destination[k] == i && G->weight[k] == w) {
-                        visited[k] = 1;
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) break;
-            }
-        }
-        if (!found) break;
-    }
-
-    printf("mirror1 weight: %d\n", found);
-    for (int i = 0; i < G->E; ++i) visited[i] = 0;
-
-    for (int i = 0; i < G->V; ++i) {
-        for (int j = G->first_edge[i]; j < G->first_edge[i + 1]; ++i) {
-            if (!visited[j]) {
-                visited[j] = 1;
-                w = G->weight[i];
-                found = 0;
-                for (int k = G->first_edge[G->destination[j]]; k < G->first_edge[G->destination[j] + 1]; ++k) {
-                    if (visited[k] && G->destination[k] == i) {
-                        visited[k] = 1;
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) break;
-            }
-        }
-        if (!found) break;
-    }
-
-    printf("mirror2 number: %d\n", found);
-    free(visited);
-}
 
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
@@ -102,25 +31,6 @@ int main(int argc, char **argv) {
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
-    //                   b  d  e  a  c  e  b  e  g  a  e  f  a  b  c  d  f  g  d  e  g  c  e  f
-    // int destination[] = {1, 3, 4, 0, 2, 4, 1, 4, 6, 0, 4, 5, 0, 1, 2, 3, 5, 6, 3, 4, 6, 2, 4, 5};
-    // thread      | 0               | 1                | 2                          | 3        |
-    // vertex      | 0       | 1     | 2      | 3       | 4                | 5       | 6        |
-    // chosen       0         3              8      10                16        19     21
-    // int weight[] = {4, 12, 9, 4, 8, 7, 8, 5, 2, 12, 3, 6, 9, 7, 5, 3, 1, 13, 6, 1, 11, 2, 13, 11};
-    // int first_edge[] = {0, 3, 6, 9, 12, 18, 21};
-    // int out_degree[] = {3, 3, 3, 3, 6, 3, 3};
-    // converter from other formats
-    // Graph_CSR *G = default_graph(24, 7);
-    // for (int i = 0; i < G->E; ++i) {
-    //     G->destination[i] = destination[i];
-    //     G->weight[i] = weight[i];
-    // }
-    // for (int i = 0; i < G->V; ++i) {
-    //     G->first_edge[i] = first_edge[i];
-    //     G->out_degree[i] = out_degree[i];
-    // }
-
     Graph_CSR *G = NULL;
     TYP *MST = NULL;
 
@@ -132,8 +42,9 @@ int main(int argc, char **argv) {
         MPI_Bcast_GraphCSR(&G, MPI_COMM_WORLD);
     }
 
+    double t = MPI_Wtime();
     boruvka(G, rank, commsz, MST, MPI_COMM_WORLD);
-
+    t = MPI_Wtime() - t;
     if (!rank) {  // file? visual?
         int tot;
         printf("MST: [ ");
@@ -142,6 +53,7 @@ int main(int argc, char **argv) {
             printf("%d ", MST[i]);
         }
         printf("]\ntot= %d\n", tot);
+        printf("time: %f\n", t);
     }
 
     if (!rank) free(MST);
@@ -150,6 +62,7 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+void verify_mirror(const Graph_CSR *);
 void compute_start_stop(const int, const int, const int, TYP *, TYP *);
 void compute_start_stop_edges(const Graph_CSR *, const TYP, const TYP, TYP *, TYP *);
 void compute_recvCounts_dipls(const int, const int, const int, int *, int *, const MPI_Comm);
@@ -160,7 +73,6 @@ void parent_compression(const int, const int, TYP *);
 void super_vertex_init(const TYP *, const TYP, const TYP, TYP *);
 void mpi_exclusive_prefix_sum(const TYP, const TYP, const int, int *, int *, const MPI_Comm);
 void out_degree_init(const Graph_CSR *, const TYP *, const TYP, const TYP, int *, int *);
-Graph_CSR *allocate_new_graph(int *, const int, const int);
 void reduce_edges(const Graph_CSR *, const TYP *, const int *, const TYP, const TYP, Graph_CSR *, int *);
 
 // LOGIC
@@ -251,7 +163,7 @@ void boruvka(Graph_CSR *G, const int rank, const int commsz, TYP *MST, const MPI
             // FOR(i, OLD_G->first_edge[a], OLD_G->first_edge[a + 1] - 1) if (OLD_G->destination[i] == b) printf("[%d - %d]\n", OLD_G->destination[i], OLD_G->weight[i]);
             // printf("edges [%d]\n", b);
             // FOR(i, OLD_G->first_edge[b], OLD_G->first_edge[b + 1] - 1) if (OLD_G->destination[i] == a) printf("[%d - %d]\n", OLD_G->destination[i], OLD_G->weight[i]);
-            printf("minedge edge: [ ");
+            printf("minedge: [ ");
             FOR(i, 0, OLD_G->V - 1) printf("%4d ", min_edge[i]);
             printf("]\n");
             // printf("minedge ed_w: [ ");
@@ -343,17 +255,17 @@ void boruvka(Graph_CSR *G, const int rank, const int commsz, TYP *MST, const MPI
         compute_recvCounts_dipls(start_e, stop_e, rank, recvCounts1, displs1, comm);
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->destination, recvCounts1, displs1, MPI_TYP, comm, &req[1]);
         MPI_Iallgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, NEW_G->weight, recvCounts1, displs1, MPI_TYP, comm, &req[2]);
-        // if (DEBUG) {
-        //     printf("[ %d | %d %d | %2d %2d | %2d ] rcv: [ ", rank, start_v, stop_v, start_e, stop_e, stop_e - start_e + 1);
-        //     FOR(i, 0, commsz - 1) printf("%d ", recvCounts1[i]);
-        //     printf("] | dsps: [ ");
-        //     FOR(i, 0, commsz - 1) printf("%d ", displs1[i]);
-        //     printf("] | tmp: [ ");
-        //     FOR(i, 1, start_e) printf("  __ ");
-        //     FOR(i, start_e, stop_e) printf("%4d ", edge_map_tmp[i]);
-        //     FOR(i, stop_e + 1, NEW_G->E - 1) printf(" ___ ");
-        //     printf("]\n");
-        // }
+        if (DEBUG) {
+            printf("[ %d | %d %d | %2d %2d | %2d ] rcv: [ ", rank, start_v, stop_v, start_e, stop_e, stop_e - start_e + 1);
+            FOR(i, 0, commsz - 1) printf("%d ", recvCounts1[i]);
+            printf("] | dsps: [ ");
+            FOR(i, 0, commsz - 1) printf("%d ", displs1[i]);
+            printf("] | tmp: [ ");
+            FOR(i, 1, start_e) printf("  __ ");
+            FOR(i, start_e, stop_e) printf("%4d ", edge_map_tmp[i]);
+            FOR(i, stop_e + 1, NEW_G->E - 1) printf(" ___ ");
+            printf("]\n");
+        }
         MPI_Iallgatherv(&edge_map_tmp[start_e], stop_e - start_e + 1, MPI_INT, edge_map, recvCounts1, displs1, MPI_INT, comm, &req[3]);
         FOR(i, 0, NEW_G->V - 1) super_vertex[i] = 0;  // reset
         MPI_Waitall(4, req, MPI_STATUS_IGNORE);       // first_edge + destination + weight + edge_map
@@ -388,6 +300,77 @@ void boruvka(Graph_CSR *G, const int rank, const int commsz, TYP *MST, const MPI
     free(MST_tmp);
 
     MPI_Wait(&req[0], MPI_STATUS_IGNORE);
+}
+
+void verify_mirror(const Graph_CSR *G) {
+    int *visited = calloc(G->E, sizeof(int));
+
+    int w, found;
+    for (int i = 0; i < G->V; ++i) {
+        for (int j = G->first_edge[i]; j < G->first_edge[i + 1]; ++i) {
+            if (!visited[j]) {
+                visited[j] = 1;
+                w = G->weight[i];
+                found = 0;
+                for (int k = G->first_edge[G->destination[j]]; k < G->first_edge[G->destination[j] + 1]; ++k) {
+                    if (G->destination[k] == i) {
+                        visited[k] = 1;
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) break;
+            }
+        }
+        if (!found) break;
+    }
+
+    printf("mirror c: %d ", found);
+    for (int i = 0; i < G->E; ++i) visited[i] = 0;
+
+    for (int i = 0; i < G->V; ++i) {
+        for (int j = G->first_edge[i]; j < G->first_edge[i + 1]; ++i) {
+            if (!visited[j]) {
+                visited[j] = 1;
+                w = G->weight[i];
+                found = 0;
+                for (int k = G->first_edge[G->destination[j]]; k < G->first_edge[G->destination[j] + 1]; ++k) {
+                    if (G->destination[k] == i && G->weight[k] == w) {
+                        visited[k] = 1;
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) break;
+            }
+        }
+        if (!found) break;
+    }
+
+    printf("w: %d ", found);
+    for (int i = 0; i < G->E; ++i) visited[i] = 0;
+
+    for (int i = 0; i < G->V; ++i) {
+        for (int j = G->first_edge[i]; j < G->first_edge[i + 1]; ++i) {
+            if (!visited[j]) {
+                visited[j] = 1;
+                w = G->weight[i];
+                found = 0;
+                for (int k = G->first_edge[G->destination[j]]; k < G->first_edge[G->destination[j] + 1]; ++k) {
+                    if (!visited[k] && G->destination[k] == i) {
+                        visited[k] = 1;
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) break;
+            }
+        }
+        if (!found) break;
+    }
+
+    printf("n: %d\n", found);
+    free(visited);
 }
 
 void compute_start_stop(const int size, const int rank, const int commsz, TYP *start_v, TYP *stop_v) {
@@ -499,16 +482,6 @@ void out_degree_init(const Graph_CSR *Gin, const TYP *parent, const TYP start_v,
             }
         }
     }
-}
-
-Graph_CSR *allocate_new_graph(int *out_degree, const int E, const int V) {  // in graph.c?
-    Graph_CSR *G = base_graph(E, V);
-    if (!G) printf("allocation err\n");
-    G->out_degree = out_degree;
-    G->first_edge = malloc(V * sizeof(int));
-    G->destination = malloc(E * sizeof(int));
-    G->weight = malloc(E * sizeof(int));
-    return G;
 }
 
 void reduce_edges(const Graph_CSR *Gin, const TYP *parent, const int *edge_map, const TYP start_v, const TYP stop_v, Graph_CSR *Gout, int *edge_map_tmp) {

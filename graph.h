@@ -50,6 +50,15 @@ Graph_CSR* base_graph(const int E, const int V) {
     return g;
 }
 
+Graph_CSR* allocate_new_graph(int* out_degree, const int E, const int V) {  // in graph.c?
+    Graph_CSR* G = base_graph(E, V);
+    G->out_degree = out_degree;
+    G->first_edge = malloc(V * sizeof(int));
+    G->destination = malloc(E * sizeof(int));
+    G->weight = malloc(E * sizeof(int));
+    return G;
+}
+
 void free_graph(Graph_CSR* G) {
     free(G->destination);
     free(G->weight);
