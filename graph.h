@@ -60,8 +60,8 @@ Graph_CSR* MPI_allocate_new_graph(int* out_degree, const int E, const int V) {
     Graph_CSR* g = MPI_base_graph(E, V);
     g->out_degree = out_degree;
     MPI_Alloc_mem(V * sizeof(int), MPI_INFO_NULL, &g->first_edge);
-    MPI_Alloc_mem(V * sizeof(int), MPI_INFO_NULL, &g->destination);
-    MPI_Alloc_mem(V * sizeof(int), MPI_INFO_NULL, &g->weight);
+    MPI_Alloc_mem(E * sizeof(int), MPI_INFO_NULL, &g->destination);
+    MPI_Alloc_mem(E * sizeof(int), MPI_INFO_NULL, &g->weight);
     return g;
 }
 

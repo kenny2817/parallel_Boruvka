@@ -38,7 +38,7 @@ void createGraph(const char *input, const int E, const int V, const int W) {
     for (; i < V; ++i) {
         printf("\r%d", iter++);
         rnd = rand() % i;
-        w = rand() % W;
+        w = (rand() % (W - 1)) + 1;
         fprintf(f, "%d %d %d\n", i, rnd, w);
         adj[i][rnd] = adj[rnd][i] = 1;
     }
