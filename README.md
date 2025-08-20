@@ -2,6 +2,12 @@
 
 parallel implemetation of boruvka algorithm using MPI whenever possible, often abusing it. This was an experiment to learn more about this approach and explore this algorithm.
 
+### Future work
+
+- openmp implementation
+- hybrid implementation
+- HPC testing
+
 ### compile
 
 `make`
